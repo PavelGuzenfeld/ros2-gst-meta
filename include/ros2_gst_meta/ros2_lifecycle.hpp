@@ -15,6 +15,7 @@ public:
     static void acquire()
     {
         std::lock_guard<std::mutex> lk(mu());
+        // cppcheck-suppress knownConditionTrueFalse
         if (ref_count()++ == 0) {
             if (!rclcpp::ok()) {
                 rclcpp::init(0, nullptr);
@@ -25,6 +26,7 @@ public:
     static void release()
     {
         std::lock_guard<std::mutex> lk(mu());
+        // cppcheck-suppress knownConditionTrueFalse
         if (--ref_count() == 0) {
             if (rclcpp::ok()) {
                 rclcpp::shutdown();
