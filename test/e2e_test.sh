@@ -309,8 +309,22 @@ PIDS_TO_KILL+=("$PIPELINE_PID")
 wait "$ECHO_PID" 2>/dev/null || true
 ECHO_OUTPUT=$(cat /tmp/echo_output.txt 2>/dev/null || true)
 
+# Issue #16: Verify payload content, not just presence
 if echo "$ECHO_OUTPUT" | grep -q "header"; then
     pass "Round-trip: message received on /test_data_out"
+    # Verify the stamp values survived the round-trip
+    if echo "$ECHO_OUTPUT" | grep -q "sec: 99"; then
+        pass "Round-trip: stamp sec=99 preserved"
+    else
+        fail "Round-trip: stamp sec=99 not found in output"
+        echo "    Output: $(echo "$ECHO_OUTPUT" | head -10)"
+    fi
+    if echo "$ECHO_OUTPUT" | grep -q "nanosec: 500"; then
+        pass "Round-trip: stamp nanosec=500 preserved"
+    else
+        fail "Round-trip: stamp nanosec=500 not found in output"
+        echo "    Output: $(echo "$ECHO_OUTPUT" | head -10)"
+    fi
 else
     fail "Round-trip: no message received on /test_data_out"
     echo "    Output: $(echo "$ECHO_OUTPUT" | head -10)"

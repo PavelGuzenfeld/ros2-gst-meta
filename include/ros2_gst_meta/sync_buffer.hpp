@@ -63,8 +63,15 @@ public:
         }
 
         switch (policy_) {
-        case Policy::Latest:
+        case Policy::Latest: {
+            // Keep only the latest entry, drain all stale ones
+            if (buf_.size() > 1) {
+                auto latest = std::move(buf_.back());
+                buf_.clear();
+                buf_.push_back(std::move(latest));
+            }
             return buf_.back();
+        }
 
         case Policy::Nearest:
             return find_nearest_locked(query_ns);
