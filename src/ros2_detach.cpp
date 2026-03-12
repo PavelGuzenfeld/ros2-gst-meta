@@ -34,13 +34,15 @@ struct GstRos2Detach {
     gchar* topic;
     gchar* msg_type;
     gchar* node_name;
+    gchar* filter_topic;
 
     // Runtime state
     std::shared_ptr<rclcpp::Node>             node;
     std::shared_ptr<rclcpp::GenericPublisher> pub;
     std::thread                               spin_thread;
     std::atomic<bool>                         spinning{false};
-    std::uint32_t                             topic_hash{0};
+    std::uint32_t                             filter_hash{0};
+    gboolean                                  filtering{FALSE};
 };
 
 struct GstRos2DetachClass {
@@ -55,6 +57,7 @@ enum {
     DETACH_PROP_TOPIC,
     DETACH_PROP_MSG_TYPE,
     DETACH_PROP_NODE_NAME,
+    DETACH_PROP_FILTER_TOPIC,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,7 +75,15 @@ static void detach_ros2_start(GstRos2Detach* self)
                                 : "gst_ros2_detach";
 
     self->node = std::make_shared<rclcpp::Node>(node_name);
-    self->topic_hash = ros2gstmeta::fnv1a(self->topic);
+
+    // Set up topic hash filter if filter-topic is specified
+    if (self->filter_topic && self->filter_topic[0] != '\0') {
+        self->filter_hash = ros2gstmeta::fnv1a(self->filter_topic);
+        self->filtering = TRUE;
+    } else {
+        self->filter_hash = 0;
+        self->filtering = FALSE;
+    }
 
     auto qos = rclcpp::SensorDataQoS();
     self->pub = self->node->create_generic_publisher(
@@ -135,7 +146,7 @@ static GstFlowReturn ros2_detach_transform_ip(GstBaseTransform* base,
     // Iterate all Ros2MsgMeta on this buffer and publish matching ones
     ros2gstmeta::Ros2MsgMeta::for_each(
         buf, [&](const ros2gstmeta::Ros2MsgData& d) {
-            if (d.topic_hash != self->topic_hash) return;
+            if (self->filtering && d.topic_hash != self->filter_hash) return;
             if (d.serialized_len == 0) return;
 
             auto serialized = std::make_unique<rclcpp::SerializedMessage>(d.serialized_len);
@@ -171,6 +182,10 @@ static void gst_ros2_detach_set_property(GObject* object, guint prop_id,
         g_free(self->node_name);
         self->node_name = g_value_dup_string(value);
         break;
+    case DETACH_PROP_FILTER_TOPIC:
+        g_free(self->filter_topic);
+        self->filter_topic = g_value_dup_string(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -192,6 +207,9 @@ static void gst_ros2_detach_get_property(GObject* object, guint prop_id,
     case DETACH_PROP_NODE_NAME:
         g_value_set_string(value, self->node_name);
         break;
+    case DETACH_PROP_FILTER_TOPIC:
+        g_value_set_string(value, self->filter_topic);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -205,6 +223,7 @@ static void gst_ros2_detach_finalize(GObject* object)
     g_free(self->topic);
     g_free(self->msg_type);
     g_free(self->node_name);
+    g_free(self->filter_topic);
     G_OBJECT_CLASS(gst_ros2_detach_parent_class)->finalize(object);
 }
 
@@ -246,6 +265,15 @@ static void gst_ros2_detach_class_init(GstRos2DetachClass* klass)
                             static_cast<GParamFlags>(G_PARAM_READWRITE |
                                                      G_PARAM_STATIC_STRINGS)));
 
+    g_object_class_install_property(
+        gobject_class, DETACH_PROP_FILTER_TOPIC,
+        g_param_spec_string("filter-topic", "Filter Topic",
+                            "Only publish metadata from this source topic "
+                            "(empty = publish all metadata)",
+                            "",
+                            static_cast<GParamFlags>(G_PARAM_READWRITE |
+                                                     G_PARAM_STATIC_STRINGS)));
+
     auto* element_class = GST_ELEMENT_CLASS(klass);
     gst_element_class_set_static_metadata(element_class,
         "ROS 2 Metadata Detach", "Filter/Metadata",
@@ -264,7 +292,8 @@ static void gst_ros2_detach_init(GstRos2Detach* self)
 {
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
     gst_base_transform_set_passthrough(GST_BASE_TRANSFORM(self), TRUE);
-    self->topic     = g_strdup("");
-    self->msg_type  = g_strdup("");
-    self->node_name = g_strdup("gst_ros2_detach");
+    self->topic        = g_strdup("");
+    self->msg_type     = g_strdup("");
+    self->node_name    = g_strdup("gst_ros2_detach");
+    self->filter_topic = g_strdup("");
 }

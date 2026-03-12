@@ -139,6 +139,7 @@ Tests plugin loading, element registration, attach/print pipelines, round-trip a
 | `topic` | string | `""` | ROS 2 topic to publish to |
 | `msg-type` | string | `""` | Message type (e.g. `sensor_msgs/msg/Imu`) |
 | `node-name` | string | `gst_ros2_detach` | ROS 2 node name |
+| `filter-topic` | string | `""` | Only publish metadata from this source topic (empty = all) |
 
 ### ros2metaprint
 

@@ -32,6 +32,10 @@ RUN bash -c '\
     source /opt/ros/jazzy/setup.bash && \
     cd build && ctest --output-on-failure --timeout 60'
 
+# Detect the GStreamer plugin directory (works on both x86_64 and aarch64)
+RUN GST_PLUGIN_DIR=$(pkg-config --variable=pluginsdir gstreamer-1.0) && \
+    echo "$GST_PLUGIN_DIR" > /tmp/gst_plugin_dir
+
 # =============================================================================
 # Stage 2: E2E integration test runner
 # =============================================================================
@@ -45,17 +49,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
         libgstreamer1.0-0 \
+        ros-jazzy-rclcpp \
         ros-jazzy-sensor-msgs \
         ros-jazzy-std-msgs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the built plugin shared library
-COPY --from=builder /src/build/libgstros2meta.so /usr/lib/gstreamer-1.0/
+# Detect the GStreamer plugin directory at runtime for this arch
+RUN mkdir -p $(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null \
+    || echo /usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/gstreamer-1.0)
+
+# Copy the built plugin shared library to the correct arch-specific dir
+# Use a shell to resolve the path dynamically
+COPY --from=builder /src/build/libgstros2gstmeta.so /tmp/libgstros2gstmeta.so
+RUN GST_PLUGIN_DIR=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null \
+    || echo /usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/gstreamer-1.0) && \
+    cp /tmp/libgstros2gstmeta.so "$GST_PLUGIN_DIR/" && \
+    rm /tmp/libgstros2gstmeta.so
 
 # Copy the E2E test script
 COPY test/e2e_test.sh /opt/e2e_test.sh
 RUN chmod +x /opt/e2e_test.sh
-
-ENV GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0
 
 ENTRYPOINT ["/opt/e2e_test.sh"]
