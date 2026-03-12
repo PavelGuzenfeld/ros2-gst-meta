@@ -49,6 +49,53 @@ jobs:
           cd build && ctest --output-on-failure --timeout 60
 
   # ---------------------------------------------------------------------------
+  # Sanitizer builds (Issue #13)
+  # ---------------------------------------------------------------------------
+  sanitizers:
+    runs-on: ubuntu-latest
+    container:
+      image: ros:jazzy
+    strategy:
+      matrix:
+        sanitizer:
+          - { name: "ASan+UBSan", flag: "ROS2_GST_META_SANITIZER_ASAN" }
+          - { name: "TSan",       flag: "ROS2_GST_META_SANITIZER_TSAN" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            git \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools
+
+      - name: Configure (${{ matrix.sanitizer.name }})
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DROS2_GST_META_BUILD_TESTS=ON \
+            -D${{ matrix.sanitizer.flag }}=ON
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cmake --build build --parallel "$(nproc)"
+
+      - name: Test (${{ matrix.sanitizer.name }})
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd build && ctest --output-on-failure --timeout 120
+
+  # ---------------------------------------------------------------------------
   # E2E integration tests via Docker
   # ---------------------------------------------------------------------------
   e2e:

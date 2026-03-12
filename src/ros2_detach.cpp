@@ -8,7 +8,10 @@
 ///   topic        (string)  — ROS 2 topic to publish to   (default: "")
 ///   msg-type     (string)  — ROS 2 message type string   (default: "")
 ///   node-name    (string)  — ROS 2 node name             (default: "gst_ros2_detach")
+///   filter-topic (string)  — only publish from this source topic (default: "" = all)
+///   qos-profile  (enum)    — sensor | reliable | system   (default: sensor)
 
+#include <ros2_gst_meta/ros2_lifecycle.hpp>
 #include <ros2_gst_meta/serialized_meta.hpp>
 
 #include <gst/base/gstbasetransform.h>
@@ -24,6 +27,37 @@
 #include <thread>
 
 // ---------------------------------------------------------------------------
+// QoS profile enum (shared with ros2_attach via identical registration)
+// ---------------------------------------------------------------------------
+
+#define GST_TYPE_ROS2_DETACH_QOS_PROFILE (gst_ros2_detach_qos_profile_get_type())
+
+static GType gst_ros2_detach_qos_profile_get_type()
+{
+    static GType type = 0;
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            {1, "Best-effort, volatile, keep-last(5)", "sensor"},
+            {2, "Reliable, volatile, keep-last(10)", "reliable"},
+            {3, "System default", "system-default"},
+            {0, nullptr, nullptr},
+        };
+        GType t = g_enum_register_static("GstRos2DetachQosProfile", values);
+        g_once_init_leave(&type, t);
+    }
+    return type;
+}
+
+static rclcpp::QoS qos_from_profile(gint profile)
+{
+    switch (profile) {
+    case 2: return rclcpp::QoS(10).reliable();
+    case 3: return rclcpp::SystemDefaultsQoS();
+    default: return rclcpp::SensorDataQoS();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // GObject boilerplate
 // ---------------------------------------------------------------------------
 
@@ -35,6 +69,7 @@ struct GstRos2Detach {
     gchar* msg_type;
     gchar* node_name;
     gchar* filter_topic;
+    gint   qos_profile;  // 1=sensor, 2=reliable, 3=system_default
 
     // Runtime state
     std::shared_ptr<rclcpp::Node>             node;
@@ -43,6 +78,7 @@ struct GstRos2Detach {
     std::atomic<bool>                         spinning{false};
     std::uint32_t                             filter_hash{0};
     gboolean                                  filtering{FALSE};
+    gboolean                                  started{FALSE};
 };
 
 struct GstRos2DetachClass {
@@ -58,6 +94,7 @@ enum {
     DETACH_PROP_MSG_TYPE,
     DETACH_PROP_NODE_NAME,
     DETACH_PROP_FILTER_TOPIC,
+    DETACH_PROP_QOS_PROFILE,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,9 +103,8 @@ enum {
 
 static void detach_ros2_start(GstRos2Detach* self)
 {
-    if (!rclcpp::ok()) {
-        rclcpp::init(0, nullptr);
-    }
+    // Issue #1: Thread-safe ref-counted init
+    ros2gstmeta::Ros2Lifecycle::acquire();
 
     const char* node_name = (self->node_name && self->node_name[0])
                                 ? self->node_name
@@ -76,7 +112,6 @@ static void detach_ros2_start(GstRos2Detach* self)
 
     self->node = std::make_shared<rclcpp::Node>(node_name);
 
-    // Set up topic hash filter if filter-topic is specified
     if (self->filter_topic && self->filter_topic[0] != '\0') {
         self->filter_hash = ros2gstmeta::fnv1a(self->filter_topic);
         self->filtering = TRUE;
@@ -85,7 +120,8 @@ static void detach_ros2_start(GstRos2Detach* self)
         self->filtering = FALSE;
     }
 
-    auto qos = rclcpp::SensorDataQoS();
+    // Issue #9: Configurable QoS
+    auto qos = qos_from_profile(self->qos_profile);
     self->pub = self->node->create_generic_publisher(
         std::string(self->topic),
         std::string(self->msg_type),
@@ -93,13 +129,16 @@ static void detach_ros2_start(GstRos2Detach* self)
 
     GST_INFO_OBJECT(self, "Publishing to %s [%s]", self->topic, self->msg_type);
 
+    // Issue #6 & #17: Check rclcpp::ok() in spin loop
     self->spinning = true;
     self->spin_thread = std::thread([self]() {
-        while (self->spinning.load(std::memory_order_relaxed)) {
+        while (self->spinning.load(std::memory_order_relaxed) && rclcpp::ok()) {
             rclcpp::spin_some(self->node);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
+
+    self->started = TRUE;
 }
 
 static void detach_ros2_stop(GstRos2Detach* self)
@@ -110,6 +149,12 @@ static void detach_ros2_stop(GstRos2Detach* self)
     }
     self->pub.reset();
     self->node.reset();
+
+    // Issue #5: Ref-counted shutdown
+    if (self->started) {
+        ros2gstmeta::Ros2Lifecycle::release();
+        self->started = FALSE;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +188,6 @@ static GstFlowReturn ros2_detach_transform_ip(GstBaseTransform* base,
     auto* self = reinterpret_cast<GstRos2Detach*>(base);
     if (!self->pub) return GST_FLOW_OK;
 
-    // Iterate all Ros2MsgMeta on this buffer and publish matching ones
     ros2gstmeta::Ros2MsgMeta::for_each(
         buf, [&](const ros2gstmeta::Ros2MsgData& d) {
             if (self->filtering && d.topic_hash != self->filter_hash) return;
@@ -186,6 +230,9 @@ static void gst_ros2_detach_set_property(GObject* object, guint prop_id,
         g_free(self->filter_topic);
         self->filter_topic = g_value_dup_string(value);
         break;
+    case DETACH_PROP_QOS_PROFILE:
+        self->qos_profile = g_value_get_enum(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -209,6 +256,9 @@ static void gst_ros2_detach_get_property(GObject* object, guint prop_id,
         break;
     case DETACH_PROP_FILTER_TOPIC:
         g_value_set_string(value, self->filter_topic);
+        break;
+    case DETACH_PROP_QOS_PROFILE:
+        g_value_set_enum(value, self->qos_profile);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -274,6 +324,14 @@ static void gst_ros2_detach_class_init(GstRos2DetachClass* klass)
                             static_cast<GParamFlags>(G_PARAM_READWRITE |
                                                      G_PARAM_STATIC_STRINGS)));
 
+    g_object_class_install_property(
+        gobject_class, DETACH_PROP_QOS_PROFILE,
+        g_param_spec_enum("qos-profile", "QoS Profile",
+                          "ROS 2 QoS profile for the publisher",
+                          GST_TYPE_ROS2_DETACH_QOS_PROFILE, 1,  // default=sensor(1)
+                          static_cast<GParamFlags>(G_PARAM_READWRITE |
+                                                   G_PARAM_STATIC_STRINGS)));
+
     auto* element_class = GST_ELEMENT_CLASS(klass);
     gst_element_class_set_static_metadata(element_class,
         "ROS 2 Metadata Detach", "Filter/Metadata",
@@ -296,4 +354,6 @@ static void gst_ros2_detach_init(GstRos2Detach* self)
     self->msg_type     = g_strdup("");
     self->node_name    = g_strdup("gst_ros2_detach");
     self->filter_topic = g_strdup("");
+    self->qos_profile  = 1;  // sensor
+    self->started      = FALSE;
 }

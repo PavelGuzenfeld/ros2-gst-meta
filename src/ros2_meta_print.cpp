@@ -16,6 +16,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -106,12 +107,13 @@ static GstFlowReturn ros2_meta_print_transform_ip(GstBaseTransform* base,
                 d.serialized_len,
                 hex_buf);
 
-            // In verbose mode, dump the full payload
+            // In verbose mode, dump the full payload (heap-allocated for safety)
             if (self->verbose && d.serialized_len > 16) {
-                char full_buf[ros2gstmeta::MAX_SERIALIZED_SIZE * 3 + 1];
-                hex_string(full_buf, sizeof(full_buf),
+                const std::size_t full_buf_size = d.serialized_len * 3 + 1;
+                auto full_buf = std::make_unique<char[]>(full_buf_size);
+                hex_string(full_buf.get(), full_buf_size,
                            d.serialized, d.serialized_len);
-                GST_INFO_OBJECT(self, "  full payload: [%s]", full_buf);
+                GST_INFO_OBJECT(self, "  full payload: [%s]", full_buf.get());
             }
         });
 

@@ -131,6 +131,7 @@ Tests plugin loading, element registration, attach/print pipelines, round-trip a
 | `sync-policy` | enum | `latest` | `latest` or `nearest` |
 | `max-age-ms` | uint | `0` | Max message staleness in ms (0 = unlimited) |
 | `node-name` | string | `gst_ros2_attach` | ROS 2 node name |
+| `qos-profile` | enum | `sensor` | `sensor`, `reliable`, or `system-default` |
 
 ### ros2detach
 
@@ -140,6 +141,7 @@ Tests plugin loading, element registration, attach/print pipelines, round-trip a
 | `msg-type` | string | `""` | Message type (e.g. `sensor_msgs/msg/Imu`) |
 | `node-name` | string | `gst_ros2_detach` | ROS 2 node name |
 | `filter-topic` | string | `""` | Only publish metadata from this source topic (empty = all) |
+| `qos-profile` | enum | `sensor` | `sensor`, `reliable`, or `system-default` |
 
 ### ros2metaprint
 

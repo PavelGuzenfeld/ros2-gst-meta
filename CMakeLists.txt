@@ -19,13 +19,20 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
     gstreamer-base-1.0
 )
 
+# Issue #12: Detect GStreamer plugin directory for install
+pkg_get_variable(GST_PLUGIN_DIR gstreamer-1.0 pluginsdir)
+if(NOT GST_PLUGIN_DIR)
+    set(GST_PLUGIN_DIR lib/gstreamer-1.0)
+endif()
+
 # Fetch gst-metadata (header-only library)
+# Issue #11: Pin to release tag, not main
 include(FetchContent)
 set(GST_METADATA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GST_METADATA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(gst-metadata
     GIT_REPOSITORY https://github.com/PavelGuzenfeld/gst-metadata.git
-    GIT_TAG        main
+    GIT_TAG        v0.1.0
 )
 FetchContent_MakeAvailable(gst-metadata)
 
@@ -64,17 +71,21 @@ target_link_libraries(gstros2meta PRIVATE
 ament_target_dependencies(gstros2meta PUBLIC rclcpp)
 
 target_compile_definitions(gstros2meta PRIVATE PACKAGE="ros2-gst-meta")
+# Issue #14: PREFIX + OUTPUT_NAME = libgstros2gstmeta.so matching GST_PLUGIN_DEFINE name
 set_target_properties(gstros2meta PROPERTIES PREFIX "libgst" OUTPUT_NAME "ros2gstmeta")
 
-# Install plugin to both ament and GStreamer plugin dirs
+# Issue #12: Install to GStreamer plugin directory
 install(TARGETS gstros2meta
-    LIBRARY DESTINATION lib
+    LIBRARY DESTINATION ${GST_PLUGIN_DIR}
 )
 
 # --- Headers (for downstream) -----------------------------------------------
 install(DIRECTORY include/ros2_gst_meta/
     DESTINATION include/ros2_gst_meta
 )
+
+# Issue #15: Export headers and targets for downstream ament packages
+ament_export_include_directories(include)
 
 # --- Tests ------------------------------------------------------------------
 option(ROS2_GST_META_BUILD_TESTS "Build tests" ON)

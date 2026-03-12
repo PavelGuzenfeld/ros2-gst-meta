@@ -172,7 +172,12 @@ TEST_CASE("set_policy changes behavior")
     REQUIRE(r1.has_value());
     CHECK(r1->cdr[0] == 3);
 
-    // Switch to nearest
+    // Re-push entries (Latest mode drains stale entries on pick)
+    buf.push(make_blob(100, 1000, 1));
+    buf.push(make_blob(200, 2000, 2));
+    buf.push(make_blob(300, 3000, 3));
+
+    // Switch to nearest — closest to query_ns=1100 is blob 1 (msg_stamp=1000)
     buf.set_policy(SyncBuffer::Policy::Nearest);
     auto r2 = buf.pick(1100, 400);
     REQUIRE(r2.has_value());
