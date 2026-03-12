@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests: cmake build + ctest inside ros:jazzy
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    runs-on: ubuntu-latest
+    container:
+      image: ros:jazzy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            git \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools
+
+      - name: Configure
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DROS2_GST_META_BUILD_TESTS=ON
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cmake --build build --parallel "$(nproc)"
+
+      - name: Test
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd build && ctest --output-on-failure --timeout 60
+
+  # ---------------------------------------------------------------------------
+  # E2E integration tests via Docker
+  # ---------------------------------------------------------------------------
+  e2e:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t ros2-gst-meta-test .
+
+      - name: Run E2E tests
+        run: docker run --rm ros2-gst-meta-test
+
+  # ---------------------------------------------------------------------------
+  # Static analysis with cppcheck
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --enable=warning,style,performance \
+            --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --inline-suppr \
+            -I include/ \
+            src/

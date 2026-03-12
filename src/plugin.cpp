@@ -3,6 +3,7 @@
 extern "C" {
 GType gst_ros2_attach_get_type(void);
 GType gst_ros2_detach_get_type(void);
+GType gst_ros2_meta_print_get_type(void);
 }
 
 #ifndef PACKAGE
@@ -14,6 +15,7 @@ static gboolean plugin_init(GstPlugin* plugin)
     gboolean ok = TRUE;
     ok &= gst_element_register(plugin, "ros2attach", GST_RANK_NONE, gst_ros2_attach_get_type());
     ok &= gst_element_register(plugin, "ros2detach", GST_RANK_NONE, gst_ros2_detach_get_type());
+    ok &= gst_element_register(plugin, "ros2metaprint", GST_RANK_NONE, gst_ros2_meta_print_get_type());
     return ok;
 }
 
