@@ -29,6 +29,16 @@ The `ros2attach` element supports configurable sync strategies for pairing ROS 2
 Additional options:
 - `max-age-ms` — discard messages older than N milliseconds (0 = unlimited)
 
+## QoS Profiles
+
+Both `ros2attach` and `ros2detach` support configurable ROS 2 QoS profiles:
+
+| Profile | Settings | Use case |
+|---------|----------|----------|
+| `sensor` (default) | Best-effort, volatile, keep-last(5) | High-frequency sensor data (IMU, GPS) |
+| `reliable` | Reliable, volatile, keep-last(10) | Commands, state updates |
+| `system-default` | Uses ROS 2 system defaults | Interop with existing nodes |
+
 ## Example Pipelines
 
 ```bash
@@ -39,11 +49,11 @@ gst-launch-1.0 \
     ! ros2metaprint \
     ! fakesink
 
-# Attach multiple topics
+# Attach multiple topics with different QoS
 gst-launch-1.0 \
     videotestsrc \
-    ! ros2attach topic=/imu node-name=gst_imu \
-    ! ros2attach topic=/gps node-name=gst_gps \
+    ! ros2attach topic=/imu node-name=gst_imu qos-profile=sensor \
+    ! ros2attach topic=/cmd node-name=gst_cmd qos-profile=reliable \
     ! ros2metaprint verbose=true \
     ! fakesink
 
@@ -54,6 +64,15 @@ gst-launch-1.0 \
     ! ros2metaprint filter-topic=/imu \
     ! ros2detach topic=/imu/relayed msg-type=sensor_msgs/msg/Imu \
     ! fakesink
+
+# Pipeline through videoconvert, queue, and UDP sink
+gst-launch-1.0 \
+    v4l2src \
+    ! videoconvert \
+    ! ros2attach topic=/imu \
+    ! queue \
+    ! rtpvrawpay \
+    ! udpsink host=192.168.1.100 port=5000
 ```
 
 Multiple `ros2attach` elements can be chained — each adds its own metadata independently. Metadata from different topics coexists on the same buffer and is distinguished by FNV-1a topic hash.
@@ -76,6 +95,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
+The plugin installs to the system GStreamer plugin directory (detected via `pkg-config`), so `gst-inspect-1.0 ros2gstmeta` works without setting `GST_PLUGIN_PATH`.
+
 ### Dependencies
 
 - ROS 2 Jazzy (`rclcpp`)
@@ -84,7 +105,7 @@ cmake --build build -j$(nproc)
   sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
   ```
-- [gst-metadata](https://github.com/PavelGuzenfeld/gst-metadata) (fetched automatically via CMake FetchContent)
+- [gst-metadata](https://github.com/PavelGuzenfeld/gst-metadata) v0.1.0 (fetched automatically via CMake FetchContent)
 
 ## Testing
 
@@ -112,14 +133,28 @@ ctest --test-dir build-tsan --output-on-failure
 
 ### E2E Integration Tests (Docker)
 
-Full end-to-end tests with ROS 2 publishers and GStreamer pipelines:
+Full end-to-end tests with ROS 2 publishers and GStreamer pipelines (works on both x86_64 and aarch64):
 
 ```bash
 docker build -t ros2-gst-meta-test .
 docker run --rm ros2-gst-meta-test
 ```
 
-Tests plugin loading, element registration, attach/print pipelines, round-trip attach→detach, multi-topic support, and graceful handling of missing publishers.
+The E2E suite covers:
+
+| Test | What it verifies |
+|------|-----------------|
+| Plugin load | `gst-inspect-1.0 ros2gstmeta` succeeds |
+| Element registration | `ros2attach`, `ros2detach`, `ros2metaprint` all registered |
+| Attach pipeline | Pipeline with live ROS 2 publisher reaches EOS |
+| videoconvert + videoscale | Metadata survives pixel format and resolution changes |
+| queue | Metadata crosses thread boundaries |
+| tee | Metadata fans out to multiple branches |
+| Deep chain | Metadata survives convert → queue → scale → queue → convert |
+| UDP sink | Pipeline with rtpvrawpay → udpsink completes |
+| Round-trip | attach → detach publishes correct message (stamp values verified) |
+| Multi-topic | Two attach elements on different topics in one pipeline |
+| No publisher | Graceful pass-through when topic has no publisher |
 
 ## Element Properties
 
@@ -160,12 +195,31 @@ ROS 2 topic ──GenericSubscription──▸ SyncBuffer ──pick()──▸ 
                             mutex-protected bounded deque
 ```
 
-The serialized CDR payload (up to 4 KB) is stored as a fixed-size POD in the GStreamer buffer metadata system via `gst-metadata`'s CRTP `MetaBase`. This means:
-- Zero heap allocation per buffer
-- Metadata survives `videoconvert`, `videoscale`, `tee`, `queue`, etc.
-- Multiple topics coexist on the same buffer
-- Topic filtering via FNV-1a hash
-- Metadata persists through buffer copies
+### Thread safety
+
+- `SyncBuffer` is mutex-protected; `push()` and `pick()` are safe to call from different threads
+- `rclcpp::init`/`shutdown` is ref-counted across all elements via `Ros2Lifecycle`
+- Spin threads check `rclcpp::ok()` and exit cleanly on SIGINT/SIGTERM
+- Each element runs its own background spin thread for ROS 2 callbacks
+
+### Design decisions
+
+- **Fixed-size metadata (4 KB POD)**: Zero heap allocation per buffer. Metadata survives all GStreamer element boundaries (`videoconvert`, `videoscale`, `tee`, `queue`, etc.)
+- **Runtime type discovery**: No compile-time message dependencies. The topic type is discovered from the ROS 2 graph at element start
+- **FNV-1a topic hashing**: Multiple topics coexist on the same buffer and are distinguished by a 32-bit hash
+- **CDR endianness**: `try_extract_stamp` respects the CDR encapsulation endianness flag for cross-platform compatibility
+- **Latest mode drain**: In `latest` sync policy, `pick()` keeps only the most recent entry, preventing unbounded memory growth from stale messages
+
+## CI
+
+The GitHub Actions CI pipeline runs on every push and PR:
+
+- **Unit tests** — cmake build + ctest in `ros:jazzy` container
+- **Sanitizers** — ASan+UBSan and TSan builds with full test suite
+- **E2E** — Docker-based integration tests with live ROS 2 publishers
+- **Lint** — cppcheck static analysis
+
+Releases are created automatically on `v*` tags after passing all tests.
 
 ## License
 
