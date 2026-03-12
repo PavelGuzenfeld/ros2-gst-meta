@@ -64,7 +64,7 @@ target_link_libraries(gstros2meta PRIVATE
 ament_target_dependencies(gstros2meta PUBLIC rclcpp)
 
 target_compile_definitions(gstros2meta PRIVATE PACKAGE="ros2-gst-meta")
-set_target_properties(gstros2meta PROPERTIES PREFIX "libgst" OUTPUT_NAME "ros2meta")
+set_target_properties(gstros2meta PROPERTIES PREFIX "libgst" OUTPUT_NAME "ros2gstmeta")
 
 # Install plugin to both ament and GStreamer plugin dirs
 install(TARGETS gstros2meta
