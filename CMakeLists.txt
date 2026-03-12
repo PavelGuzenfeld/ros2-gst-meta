@@ -51,6 +51,7 @@ endif()
 add_library(gstros2meta SHARED
     src/ros2_attach.cpp
     src/ros2_detach.cpp
+    src/ros2_meta_print.cpp
     src/plugin.cpp
 )
 target_include_directories(gstros2meta PRIVATE
@@ -96,6 +97,28 @@ if(ROS2_GST_META_BUILD_TESTS)
         PkgConfig::GST
     )
     add_test(NAME sync_buffer COMMAND test_sync_buffer)
+
+    add_executable(test_edge_cases test/test_edge_cases.cpp)
+    target_include_directories(test_edge_cases PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_edge_cases PRIVATE
+        gst-metadata
+        doctest::doctest
+        PkgConfig::GST
+    )
+    add_test(NAME edge_cases COMMAND test_edge_cases)
+
+    add_executable(test_fuzz test/test_fuzz.cpp)
+    target_include_directories(test_fuzz PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_fuzz PRIVATE
+        gst-metadata
+        doctest::doctest
+        PkgConfig::GST
+    )
+    add_test(NAME fuzz COMMAND test_fuzz)
 endif()
 
 ament_package()
